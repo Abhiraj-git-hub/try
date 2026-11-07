@@ -1,19 +1,22 @@
-# Android Browser Diagnostics (consent-based)
+# Android Remote Support Installation Page
 
-A small Flask app with one diagnostic link and one PC dashboard. It gathers only browser-exposed diagnostics after the visitor explicitly consents and submits the report.
+This Flask app serves a consent-based installation page and a private dashboard. The install button downloads a signed Android APK only if the project owner has placed it at `downloads/android-remote-support.apk` (or configured `AGENT_APK_PATH`). If the APK is absent, the server displays an explicit “not available yet” message.
 
-## What it collects
+## Important Android limitations
 
-- Public IP lookup through `api.ipify.org` (only after consent; if the lookup fails, the report says unavailable)
-- Browser user-agent and reported platform
-- Language, timezone, screen/viewport dimensions
-- Online flag and optional browser network hints
-- Optional hardware-concurrency, device-memory and touch-point hints
-- Submission timestamp
+- A website cannot silently install an APK or grant Android permissions. The Android package installer and Android permission screens require on-device approval.
+- A remote-support app must be clearly identified, obtain Android screen-capture approval, and require explicit enabling of Accessibility if that capability is used.
+- This project does not implement the Android agent itself. It does not provide screen viewing, touch control, account access, message access or file access.
+- Do not hide the app, disguise it, or suppress Android's indicators and permission prompts.
 
-## What it does NOT collect
+## Publish the APK when it exists
 
-It cannot inspect email accounts, installed apps, messages, contacts, photos, files, passwords, cookies, Android settings, ADB status, accessibility permissions or device-admin settings. It does not install an agent, request sensitive Android permissions, or enable remote control.
+1. Build and sign a legitimate Android remote-support agent that follows Android permission and foreground-service requirements.
+2. Review the app's permissions and provide a clear in-app disconnect/revoke control.
+3. Place the release APK at `downloads/android-remote-support.apk` in the deployed app, or set `AGENT_APK_PATH` to its server-side path.
+4. Redeploy. The install button will then download that APK. Android still asks the device user to confirm installation and subsequent permissions.
+
+Do not put signing keys, passwords, access tokens or private user data in the public Git repository.
 
 ## Run locally on Windows
 
@@ -23,37 +26,23 @@ It cannot inspect email accounts, installed apps, messages, contacts, photos, fi
 
    ```cmd
    py -m venv .venv
-   .venv\Scripts\activate
+   .venv\\Scripts\\activate
    py -m pip install -r requirements.txt
-   ```
-
-4. Create long random tokens and set them in the same Command Prompt session:
-
-   ```cmd
-   py -c "import secrets; print('REPORT_TOKEN='+secrets.token_urlsafe(24)); print('DASHBOARD_TOKEN='+secrets.token_urlsafe(32))"
-   set REPORT_TOKEN=PASTE_THE_FIRST_VALUE_HERE
-   set DASHBOARD_TOKEN=PASTE_THE_SECOND_VALUE_HERE
    py app.py
    ```
 
-5. Open `http://127.0.0.1:5000/dashboard/YOUR_DASHBOARD_TOKEN` to see the dashboard.
-
-A locally running app is not publicly reachable from the phone unless you deploy it to a hosting provider with HTTPS. Do not expose the Flask development server directly to the internet.
+4. Open the local dashboard path printed by the app. For public access, deploy behind HTTPS using a production WSGI server.
 
 ## Deploy to Render
 
-1. Upload this folder to a private GitHub repository.
-2. In Render, create a new Blueprint and select that repository; Render will use `render.yaml`.
-3. The Blueprint generates separate random `REPORT_TOKEN` and `DASHBOARD_TOKEN` values.
-4. After deployment, open `https://YOUR-SERVICE.onrender.com/dashboard/YOUR_DASHBOARD_TOKEN` using the dashboard token from the Render environment settings.
-5. Copy the diagnostic URL shown on the dashboard and share it only with the intended phone user.
+Use the existing `render.yaml` Blueprint or configure a Python Web Service with:
 
-Keep the dashboard URL private. Anyone who obtains it can view and delete stored reports. Use HTTPS; do not put passwords, one-time codes or personal account credentials into the page.
+- Build: `pip install -r requirements.txt`
+- Start: `gunicorn --bind 0.0.0.0:$PORT app:app`
+- Environment variables: secure random `REPORT_TOKEN` and `DASHBOARD_TOKEN`
 
-## Important limitation for this situation
+The dashboard is protected by `DASHBOARD_TOKEN`; the installation page uses `REPORT_TOKEN`. Keep both secret.
 
-The phone must actually open the diagnostic link and someone must tick the consent box and submit the report. A link cannot open itself on a remote phone with a dead touchscreen. If no authorised remote-control channel was configured beforehand, this diagnostic app cannot create one.
+## Existing diagnostic reports
 
-## Data handling
-
-Reports are stored in `reports.sqlite3` in the app's data directory. The dashboard has a delete-all button. On ephemeral hosting, local database files may be lost when the service restarts or redeploys. For persistent hosting, attach a private persistent disk or use a managed database, and define an appropriate retention policy.
+Previously collected diagnostic reports remain supported by the dashboard and submit endpoint. The visitor-facing page now presents the transparent app-download workflow instead of submitting a browser report.

@@ -15,12 +15,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, abort, jsonify, redirect, render_template_string, request, url_for
+from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file, url_for
 
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("DB_PATH", str(APP_DIR / "reports.sqlite3")))
 REPORT_TOKEN = os.environ.get("REPORT_TOKEN", "")
 DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
+AGENT_APK_PATH = Path(os.environ.get("AGENT_APK_PATH", str(APP_DIR / "downloads" / "android-remote-support.apk")))
 
 if not REPORT_TOKEN:
     REPORT_TOKEN = secrets.token_urlsafe(24)
@@ -36,9 +37,9 @@ PAGE = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Device diagnostics</title>
+  <title>Android Remote Support — Install</title>
   <style>
-    :root { color-scheme: light dark; --bg:#101827; --panel:#182438; --text:#edf3fc; --muted:#aab8cc; --line:#33445e; --accent:#72a7ff; }
+    :root { color-scheme: light dark; --bg:#101827; --panel:#182438; --text:#edf3fc; --muted:#aab8cc; --line:#33445e; --accent:#72a7ff; --warning:#f3c969; }
     * { box-sizing:border-box; }
     body { margin:0; padding:24px 14px; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
     main { max-width:720px; margin:0 auto; }
@@ -48,124 +49,63 @@ PAGE = r'''<!doctype html>
     p { margin:8px 0; }
     .muted { color:var(--muted); }
     .notice { border-left:4px solid var(--accent); padding:10px 12px; background:#24344c; border-radius:8px; }
+    .warning { border-left:4px solid var(--warning); padding:10px 12px; background:#3a3324; border-radius:8px; }
     ul { padding-left:22px; }
     button { width:100%; border:0; border-radius:10px; padding:14px 16px; background:var(--accent); color:#081426; font-weight:700; font-size:1rem; cursor:pointer; margin-top:12px; }
-    button:disabled { opacity:.55; cursor:wait; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
     .check { display:flex; gap:10px; align-items:flex-start; margin-top:16px; }
     .check input { margin-top:5px; transform:scale(1.2); }
     #status { white-space:pre-wrap; overflow-wrap:anywhere; }
     .small { font-size:.88rem; }
-    a { color:var(--accent); }
   </style>
 </head>
 <body>
 <main>
   <section class="card">
-    <h1>Device diagnostics</h1>
-    <p class="muted">A limited browser/device report to help troubleshoot connectivity and compatibility.</p>
+    <h1>Android Remote Support</h1>
+    <p class="muted">Download the clearly identified Android support app to set up an authorised support session with your computer.</p>
     <div class="notice">
-      <strong>Privacy notice:</strong> Nothing is collected until you tick the consent box and press the submit button. You will be shown what will be shared.
+      <strong>Before installing:</strong> This page only offers an APK download. It cannot silently install the app or grant Android permissions. Android will show its own installation and permission prompts.
     </div>
   </section>
   <section class="card">
-    <h2>What this page can collect</h2>
+    <h2>What the support app is designed to do</h2>
     <ul>
-      <li>Public IP address (looked up using ipify after consent)</li>
-      <li>Browser user-agent and browser-reported platform</li>
-      <li>Language, timezone, screen size and colour depth</li>
-      <li>Online status and network hints, if the browser exposes them</li>
-      <li>Approximate device capability hints such as CPU core count and touch-point count, if exposed</li>
-      <li>Submission time</li>
+      <li>Connect to a paired PC dashboard using an authenticated, encrypted session.</li>
+      <li>Share the phone screen only after Android's screen-capture approval.</li>
+      <li>Offer remote interaction only after the user explicitly enables the required Android accessibility permission.</li>
+      <li>Show a visible app identity and a clear way to disconnect or revoke access.</li>
     </ul>
-    <h2>What this page cannot access</h2>
+    <h2>What installation does not do</h2>
     <ul>
-      <li>Email addresses/accounts signed into Android</li>
-      <li>Installed applications, messages, contacts, photos or files</li>
-      <li>Android debugging, accessibility or device-admin settings</li>
-      <li>Saved passwords, cookies, banking apps or other private app data</li>
-      <li>Screen contents or touchscreen control</li>
+      <li>It does not silently read email, messages, contacts, passwords or other apps' private data.</li>
+      <li>It does not hide its app icon or disguise itself as another application.</li>
+      <li>It does not silently enable Accessibility, screen sharing or device administrator access.</li>
+      <li>It does not bypass Android's installer or permission controls.</li>
     </ul>
-    <p class="muted small">This page does not request location, camera, microphone, contacts, notifications or file access. It does not install software or change device settings.</p>
+    <div class="warning small"><strong>Android approval required:</strong> After downloading, Android may ask you to allow installation from this browser. You must then confirm installation and separately approve any requested support permissions. A touchscreen that cannot respond may prevent these steps unless an already-authorised input method is available.</div>
     <label class="check">
       <input id="consent" type="checkbox">
-      <span>I understand the information listed above and consent to sending this limited diagnostic report to the person who shared this link.</span>
+      <span>I understand that this downloads a visible remote-support app, that Android will ask me to approve installation and permissions, and that an active support session must remain visible and can be disconnected.</span>
     </label>
-    <button id="send" disabled>Agree and submit diagnostic report</button>
+    <button id="install" disabled>Install Android support app</button>
     <p id="status" class="small muted" role="status" aria-live="polite"></p>
   </section>
   <section class="card small muted">
-    <strong>Important:</strong> Submitting this report does not give anyone control of this phone. A web page cannot use Wi-Fi alone to inspect Android accounts or remotely operate the device. Do not enter passwords or one-time codes on this page.
+    <strong>Availability:</strong> The APK must be built, signed and uploaded by the project owner before this button can deliver it. If it is not yet available, this page will say so. Do not install APKs from unknown sources or share account passwords or one-time codes.
   </section>
 </main>
 <script>
 (() => {
   const consent = document.getElementById('consent');
-  const send = document.getElementById('send');
+  const install = document.getElementById('install');
   const status = document.getElementById('status');
-  consent.addEventListener('change', () => { send.disabled = !consent.checked; });
-
-  function safeConnectionInfo() {
-    const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-    if (!c) return null;
-    return {
-      type: c.type || null,
-      effectiveType: c.effectiveType || null,
-      downlinkMbps: Number.isFinite(c.downlink) ? c.downlink : null,
-      rttMs: Number.isFinite(c.rtt) ? c.rtt : null,
-      saveData: typeof c.saveData === 'boolean' ? c.saveData : null
-    };
-  }
-
-  send.addEventListener('click', async () => {
+  consent.addEventListener('change', () => { install.disabled = !consent.checked; });
+  install.addEventListener('click', () => {
     if (!consent.checked) return;
-    send.disabled = true;
-    status.textContent = 'Preparing the report…';
-    let publicIp = null;
-    let ipLookupStatus = 'unavailable';
-    try {
-      // This external lookup happens only after the visitor has consented.
-      const ipResponse = await fetch('https://api.ipify.org?format=json', {cache:'no-store', credentials:'omit'});
-      if (ipResponse.ok) {
-        const ipData = await ipResponse.json();
-        publicIp = typeof ipData.ip === 'string' ? ipData.ip : null;
-        ipLookupStatus = publicIp ? 'success' : 'unavailable';
-      }
-    } catch (_) { ipLookupStatus = 'unavailable'; }
-
-    const report = {
-      publicIp,
-      ipLookupStatus,
-      userAgent: navigator.userAgent || null,
-      platform: navigator.userAgentData?.platform || navigator.platform || null,
-      browserMobileHint: navigator.userAgentData?.mobile ?? null,
-      language: navigator.language || null,
-      languages: Array.isArray(navigator.languages) ? navigator.languages.slice(0, 8) : [],
-      timezone: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (_) { return null; } })(),
-      screen: {width: screen.width || null, height: screen.height || null, availWidth: screen.availWidth || null, availHeight: screen.availHeight || null, colorDepth: screen.colorDepth || null, pixelRatio: window.devicePixelRatio || null},
-      viewport: {width: window.innerWidth || null, height: window.innerHeight || null},
-      online: typeof navigator.onLine === 'boolean' ? navigator.onLine : null,
-      connection: safeConnectionInfo(),
-      hardwareConcurrency: Number.isInteger(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : null,
-      deviceMemoryGb: Number.isFinite(navigator.deviceMemory) ? navigator.deviceMemory : null,
-      maxTouchPoints: Number.isInteger(navigator.maxTouchPoints) ? navigator.maxTouchPoints : null,
-      cookiesEnabled: typeof navigator.cookieEnabled === 'boolean' ? navigator.cookieEnabled : null,
-      submittedAtClient: new Date().toISOString()
-    };
-
-    status.textContent = 'Sending the limited report…';
-    try {
-      const response = await fetch(location.pathname + '/submit', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        credentials:'same-origin', body:JSON.stringify(report)
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || 'The server rejected the report.');
-      status.textContent = 'Report submitted. Reference: ' + result.reportId + '. You may now close this page.';
-      consent.disabled = true;
-    } catch (error) {
-      status.textContent = 'Could not submit the report: ' + (error.message || 'unknown error') + '. Check the connection and try again.';
-      send.disabled = false;
-    }
+    install.disabled = true;
+    status.textContent = 'Checking whether the signed Android APK is available…';
+    window.location.assign(location.pathname + '/install');
   });
 })();
 </script>
@@ -217,6 +157,24 @@ def diagnostic_page(token: str):
     if not secrets.compare_digest(token, REPORT_TOKEN):
         abort(404)
     return render_template_string(PAGE)
+
+
+@app.get("/d/<token>/install")
+def download_agent(token: str):
+    if not secrets.compare_digest(token, REPORT_TOKEN):
+        abort(404)
+    if not AGENT_APK_PATH.is_file():
+        return render_template_string(
+            """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>App not available yet</title><body style="font:16px system-ui;max-width:640px;margin:48px auto;padding:0 18px;background:#101827;color:#edf3fc"><h1>Android app not available yet</h1><p>The installation page is ready, but the signed APK has not been uploaded to the server.</p><p>No app was installed and no device permissions were changed. Return to the support page later or contact the project owner.</p></body></html>""",
+            503,
+        )
+    return send_file(
+        AGENT_APK_PATH,
+        mimetype="application/vnd.android.package-archive",
+        as_attachment=True,
+        download_name="android-remote-support.apk",
+        max_age=0,
+    )
 
 
 @app.post("/d/<token>/submit")
